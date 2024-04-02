@@ -1069,12 +1069,20 @@ def _block_unrolled_lstm(input_sequence, initial_state, w_i, w_h, b):
 
 def _cudnn_unrolled_lstm(input_sequence, initial_state, w_i, w_h, b):
   """GPU/CuDNN-RNN specialization of :class:`UnrolledLSTM`."""
+  max_sequence_length = tf.shape(input_sequence)[0]
+  batch_dim = tf.expand_dims(tf.shape(input_sequence)[1], axis=0)
+
+  # cuDNN 9+ always requires the sequence_length array argument to be present,
+  # so we generate it here with the max_sequence_length in all positions.
+  sequence_lengths = tf.broadcast_to(max_sequence_length, batch_dim)
+
   # Intuitively, concat/transpose is not free but we did not see
   # it significantly affecting performance in benchmarks.
-  output_sequence, all_hidden, all_cell, _ = tf.raw_ops.CudnnRNN(
+  output_sequence, all_hidden, all_cell, _, _ = tf.raw_ops.CudnnRNNV3(
       input=input_sequence,
       input_h=tf.expand_dims(initial_state.hidden, axis=0),
       input_c=tf.expand_dims(initial_state.cell, axis=0),
+      sequence_lengths=sequence_lengths,
       params=tf.concat(
           [
               tf.reshape(tf.transpose(w_i), [-1]),
@@ -1659,7 +1667,15 @@ class CuDNNGRU(RNNCore):
     w_hz, w_hr, w_ha = tf.split(self._w_h, num_or_size_splits=3, axis=1)
     b_z, b_r, b_a = tf.split(self.b, num_or_size_splits=3)
     b_h_zero = tf.zeros([self._hidden_size])
-    outputs, next_hidden, _, _ = tf.raw_ops.CudnnRNN(
+
+    max_sequence_length = tf.shape(inputs)[0]
+    batch_dim = tf.expand_dims(tf.shape(inputs)[1], axis=0)
+
+    # cuDNN 9+ always requires the sequence_length array argument to be present,
+    # so we generate it here with the max_sequence_length in all positions.
+    sequence_lengths = tf.broadcast_to(max_sequence_length, batch_dim)
+
+    outputs, next_hidden, _, _, _ = tf.raw_ops.CudnnRNNV3(
         input=inputs,
         input_h=tf.expand_dims(prev_state, axis=0),
         input_c=0,
@@ -1681,7 +1697,8 @@ class CuDNNGRU(RNNCore):
                 b_h_zero,
             ],
             axis=0),
-        rnn_mode="gru")
+        rnn_mode="gru",
+        sequence_lengths=sequence_lengths)
 
     return outputs, next_hidden
 
